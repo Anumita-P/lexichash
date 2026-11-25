@@ -402,7 +402,7 @@ def pairwise_comparison(sketches, n_seq, n_hash, n_cpu, alpha, max_k, min_k, **a
     Returns:
         pair_match_lens: Dict of pair:match-length. Pair is a tuple of the form (id1,id2,+/-).
     """
-    n_pairs = n_seq * alpha if alpha is not None else 10000000000000000000000
+    n_pairs = int(n_seq * alpha) if alpha is not None else 10000000000000000000000
     print(f'number of pairs to output: {n_pairs}')
     all_matching_sets = prefix_tree_multiproc(sketches, n_hash, n_cpu, max_k, min_k)
 #     min_k = get_k_thresh(all_matching_sets) if min_k is None else min_k
@@ -571,20 +571,22 @@ def yscore(ind1,ind2,sketches):
     #return the y score
     return y_score
 
-def expdecayscore(y_score, decay):
+def expdecayscore(y_score, decay, top_k=100):
+    """Exponentially decayed sum of the match lengths.
 
+    The match lengths are sorted in descending order and the i-th largest
+    one is weighted by (1 - decay) ** i. Only the top_k largest are used.
+    """
     revsorted_y_score = sorted(y_score, reverse=True)
-    # print(revsorted_y_score)
-    n = len(revsorted_y_score)
-    
-    finalscore=0
-    for i in range(max(n,100)):
-        finalscore += revsorted_y_score[i] * (1-decay)**i
+    finalscore = 0
+    for i in range(min(len(revsorted_y_score), top_k)):
+        finalscore += revsorted_y_score[i] * (1 - decay) ** i
 
     return finalscore
+
 import pandas as pd
 
-def refine_match_pairs(pair_match_lens, sketches):
+def refine_match_pairs(pair_match_lens, sketches, decay=0.1, top_k=100):
     '''
     Refine the match pairs to only include the top n_pairs.
 
@@ -602,7 +604,7 @@ def refine_match_pairs(pair_match_lens, sketches):
         ind1, ind2, is_rc = key
         val = pair_match_lens[key]
         y_score = yscore(ind1, ind2, sketches)
-        score = expdecayscore(y_score, 0.1)
+        score = expdecayscore(y_score, decay, top_k)
         final_key_val[key] = score
         records.append({'id1':ind1, 'id2':ind2, 'match_len': val, 'is_rc': is_rc, 'score': score})
 
