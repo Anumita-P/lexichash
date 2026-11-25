@@ -45,11 +45,20 @@ vector<string> read_fasta(const string &fasta_path, size_t max_k) {
 }
 
 
+long long mask_seed = -1; // set with --seed; negative means "use random_device"
+string mask_file_path;    // set with --mask_file
+
 vector<vector<int>> get_masks(int n_masks, int max_k)
 {
     vector<vector<int>> masks(n_masks, vector<int>(max_k));
-    random_device rd;
-    mt19937 gen(rd());
+    mt19937 gen;
+    if (mask_seed >= 0)
+        gen.seed(static_cast<unsigned int>(mask_seed));
+    else
+    {
+        random_device rd;
+        gen.seed(rd());
+    }
     uniform_int_distribution<> dist(0, 3);
 
     for (int i = 0; i < n_masks; ++i)
@@ -60,6 +69,53 @@ vector<vector<int>> get_masks(int n_masks, int max_k)
         }
     }
     return masks;
+}
+
+// Mask file format: one mask per line, max_k characters, each one of 0,1,2,3
+// (0=A, 1=T, 2=G, 3=C, the same encoding as BASE_TO_INT and the Python code).
+bool load_masks(const string &path, int max_k, vector<vector<int>> &masks)
+{
+    ifstream in(path);
+    if (!in)
+        return false;
+    masks.clear();
+    string line;
+    while (getline(in, line))
+    {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (line.empty())
+            continue;
+        if ((int)line.size() != max_k)
+        {
+            cerr << "Error: mask file " << path << " has a line of length " << line.size()
+                 << " but max_k is " << max_k << "\n";
+            exit(1);
+        }
+        vector<int> mask(max_k);
+        for (int j = 0; j < max_k; ++j)
+        {
+            if (line[j] < '0' || line[j] > '3')
+            {
+                cerr << "Error: mask file " << path << " contains a character other than 0-3\n";
+                exit(1);
+            }
+            mask[j] = line[j] - '0';
+        }
+        masks.push_back(mask);
+    }
+    return !masks.empty();
+}
+
+void save_masks(const string &path, const vector<vector<int>> &masks)
+{
+    ofstream out(path);
+    for (const auto &mask : masks)
+    {
+        for (int x : mask)
+            out << x;
+        out << "\n";
+    }
 }
 string reverse_complement(const string &seq)
 {
@@ -697,6 +753,14 @@ int main(int argc, char *argv[])
         {
             alpha = stof(argv[++i]);
         }
+        else if (arg == "--seed" && i + 1 < argc)
+        {
+            mask_seed = stoll(argv[++i]);
+        }
+        else if (arg == "--mask_file" && i + 1 < argc)
+        {
+            mask_file_path = argv[++i];
+        }
         else if (arg == "--no_rc")
         {
             RC = false;
@@ -719,6 +783,19 @@ int main(int argc, char *argv[])
     }
 
     // Validation
+    if (max_k < 1 || max_k > 32)
+    {
+        cerr << "Error: max_k must be between 1 and 32 (k-mers are packed into 64 bits)\n";
+        return 1;
+    }
+    if (min_k < 1 || min_k > max_k)
+    {
+        cerr << "Error: min_k must be between 1 and max_k\n";
+        return 1;
+    }
+    // The sketching code reads the upper-case globals; keep them in sync with the flags.
+    MIN_K = min_k;
+    MAX_K = max_k;
     if (method != "lexichash" && method != "minhash")
     {
         cerr << "Error: method must be 'lexichash' or 'minhash'\n";
@@ -750,7 +827,21 @@ int main(int argc, char *argv[])
     cout << "Generating masks...\n\n\n";
     auto start = chrono::high_resolution_clock::now();
     
-    vector<vector<int>> masks = get_masks(n_hash, max_k);
+    vector<vector<int>> masks;
+    if (!mask_file_path.empty() && load_masks(mask_file_path, max_k, masks))
+    {
+        n_hash = (int)masks.size();
+        cout << "Loaded " << n_hash << " masks from " << mask_file_path << "\n";
+    }
+    else
+    {
+        masks = get_masks(n_hash, max_k);
+        if (!mask_file_path.empty())
+        {
+            save_masks(mask_file_path, masks);
+            cout << "Saved " << masks.size() << " masks to " << mask_file_path << "\n";
+        }
+    }
     shared_masks = masks;
 
     // vector<vector<int>> masks;

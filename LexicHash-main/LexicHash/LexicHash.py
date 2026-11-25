@@ -239,7 +239,7 @@ def pairwise_comparison(sketches, n_seq, n_hash, n_cpu, alpha, max_k, min_k, **a
     Returns:
         pair_match_lens: Dict of pair:match-length. Pair is a tuple of the form (id1,id2,+/-).
     """
-    n_pairs = n_seq * alpha if alpha is not None else 1000000000000000
+    n_pairs = int(n_seq * alpha) if alpha is not None else 1000000000000000
     print(f'number of pairs to output: {n_pairs}')
     all_matching_sets = prefix_tree_multiproc(sketches, n_hash, n_cpu, max_k, min_k)
 #     min_k = get_k_thresh(all_matching_sets) if min_k is None else min_k
