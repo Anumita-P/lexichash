@@ -22,7 +22,10 @@ with open("NCTC1080_daligner_ground_truth.txt", "r") as f:
             ground_truth_raw[pair] = aln_len
 
 # --- Filter ground truth with Jaccard threshold ---
-jaccard_threshold = 0.2
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "evaluation"))
+from lh_eval import THETA  # one alignment-fraction threshold (0.2) for the whole repository
+jaccard_threshold = THETA
 true_pairs = set()
 for (i1, i2), a in ground_truth_raw.items():
     l1, l2 = map_len.get(i1, 0), map_len.get(i2, 0)

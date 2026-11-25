@@ -9,21 +9,21 @@ import matplotlib.pyplot as plt
 PROJ_DIR = '/home/gcgreen2/alignment'
 # GT_DIR = join(PROJ_DIR, 'spectral_jaccard_similarity/groundTruths')
 
-def get_gt_df(gt_path, seq_lens, min_theta=0.3):
+def get_gt_df(gt_path, seq_lens, min_theta=0.2):  # same threshold as THETA in evaluation/lh_eval.py
     gt_df = pd.read_csv(gt_path, sep='\t', header=None, names=['i1','i2','overlap','direc'],
                        dtype={'i1':int,'i2':int,'overlap':float,'direc':str})
     thetas = get_thetas(gt_df, seq_lens)
-    gt_df = gt_df[thetas > min_theta]
+    gt_df = gt_df[thetas >= min_theta]
     return gt_df
 
-def get_gt_df_nctc(gt_path, seq_lens, min_theta=0.3):
+def get_gt_df_nctc(gt_path, seq_lens, min_theta=0.2):  # same threshold as THETA in evaluation/lh_eval.py
     gt_df = pd.read_csv(gt_path, sep='\t', header=None, names=['i1','i2','overlap'],
                        dtype={'i1':int,'i2':int,'overlap':float}, usecols=[0,1,2])
     gt_df['direc'] = '+'
     gt_df['i1'] = [i1 for i1 in gt_df['i1']]
     gt_df['i2'] = [i2 for i2 in gt_df['i2']]
     thetas = get_thetas(gt_df, seq_lens)
-    gt_df = gt_df[thetas > min_theta]
+    gt_df = gt_df[thetas >= min_theta]
     return gt_df
 
 def get_thetas(gt_df, seq_lens):

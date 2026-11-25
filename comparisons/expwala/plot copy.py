@@ -6,6 +6,9 @@ import os
 import csv
 import re
 from sklearn.metrics import auc
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "evaluation"))
+from lh_eval import THETA  # one alignment-fraction threshold (0.2) for the whole repository
 
 # --- Setup paths ---
 base_dir = os.path.dirname(__file__)
@@ -30,7 +33,7 @@ with open(gt_path) as f:
         a, b, aln = int(parts[0]), int(parts[1]), float(parts[2])
         l1, l2 = map_len[a], map_len[b]
         jaccard = aln / (l1 + l2 - aln)
-        if jaccard >= 0.2:
+        if jaccard >= THETA:
             true_pairs.add((min(a, b), max(a, b)))
 
 # --- Evaluate from CSV ---

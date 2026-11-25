@@ -56,3 +56,16 @@ The C++ program now needs zlib (`-lz`) because it reads `.fasta.gz` directly; no
 decompress first. Characters other than A, C, G, T are removed and lower case is upper-cased,
 as in the Python code. Reads shorter than `max_k` keep their position in the numbering and are
 simply not sketched, so output indices always equal the record number in the FASTA file.
+
+## Evaluation tests (batch 3)
+
+* `test_threshold_consistency.py` checks that every evaluation script uses the one ground-truth
+  threshold `THETA = 0.2` from `evaluation/lh_eval.py` and that no script passes another value.
+* `test_refine_strand.py` checks that `refine_match_pairs` scores a reverse-strand ('-') pair on the
+  read / reverse-complement sketch rows (it needs the Python packages numpy and pandas).
+
+```bash
+python3 tests/test_threshold_consistency.py
+python3 tests/test_refine_strand.py
+```
+
