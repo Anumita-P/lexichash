@@ -6,7 +6,7 @@ The `mycode` directory has the C++ code.
 Instructions to compile and run:
 
 ```bash
-g++ -o2 -fopenmp lexic_hash.cpp -o lexichash.exe -O3 -march=native -funroll-loops
+g++ -o2 -fopenmp lexic_hash.cpp -o lexichash.exe -O3 -march=native -funroll-loops -lz
 ./lexichash.exe --out output --fasta NCTC1080_reads.fasta --n_hash 100 --alpha 1 --n_cpu 8
 ```
 
