@@ -35,7 +35,10 @@ with open("pairwise_results.txt", "r") as f:
             predicted_map[pair] = predicted_len
 
 # --- Filter ground truth by Jaccard threshold ---
-jaccard_threshold = 0.2
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "evaluation"))
+from lh_eval import THETA  # one alignment-fraction threshold (0.2) for the whole repository
+jaccard_threshold = THETA
 true_pairs = set()
 for (i1, i2), a in ground_truth_raw.items():
     l1 = map_len.get(i1, 0)

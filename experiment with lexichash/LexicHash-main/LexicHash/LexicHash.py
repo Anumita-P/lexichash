@@ -56,7 +56,7 @@ def find_overlaps(**args):
     utils.print_clocktime(start, perf_counter(), 'pairwise comparison')
 
     # # # REFINE MATCH PAIRS
-    sorted_df = refine_match_pairs(pair_match_lens,sketches)
+    sorted_df = refine_match_pairs(pair_match_lens,sketches, n_seq=n_seq)
     sorted_df.to_csv('finalorder.csv', index=False)
     
     
@@ -586,13 +586,16 @@ def expdecayscore(y_score, decay, top_k=100):
 
 import pandas as pd
 
-def refine_match_pairs(pair_match_lens, sketches, decay=0.1, top_k=100):
+def refine_match_pairs(pair_match_lens, sketches, decay=0.1, top_k=100, n_seq=None):
     '''
     Refine the match pairs to only include the top n_pairs.
 
     Args:
         pair_match_lens: Dict of pairs:match-length. Pair is a tuple of the form (id1,id2,+/-).
-        sketches: Data used to compute scores
+        sketches: Data used to compute scores. With reverse complements the matrix has 2*n_seq rows:
+            rows 0..n_seq-1 are the reads, rows n_seq..2*n_seq-1 their reverse complements.
+        n_seq: Number of reads. Needed to pick the right rows for each strand; if None the sketches
+            are assumed to have no reverse-complement rows.
 
     Returns:
         sorted_df: DataFrame sorted by score
@@ -603,7 +606,20 @@ def refine_match_pairs(pair_match_lens, sketches, decay=0.1, top_k=100):
     for key in pair_match_lens:
         ind1, ind2, is_rc = key
         val = pair_match_lens[key]
-        y_score = yscore(ind1, ind2, sketches)
+        if n_seq is not None and len(sketches) == 2 * n_seq:
+            # Use the rows that were compared for this strand. A '+' pair matches read-read and
+            # revcomp-revcomp, a '-' pair matches read-revcomp and revcomp-read; per mask take the
+            # larger match, as the pair search does. (Before, rows ind1 and ind2 were always used,
+            # which is wrong for '-' pairs.)
+            if is_rc == '-':
+                y_a = yscore(ind1, ind2 + n_seq, sketches)
+                y_b = yscore(ind1 + n_seq, ind2, sketches)
+            else:
+                y_a = yscore(ind1, ind2, sketches)
+                y_b = yscore(ind1 + n_seq, ind2 + n_seq, sketches)
+            y_score = [max(p, q) for p, q in zip(y_a, y_b)]
+        else:
+            y_score = yscore(ind1, ind2, sketches)
         score = expdecayscore(y_score, decay, top_k)
         final_key_val[key] = score
         records.append({'id1':ind1, 'id2':ind2, 'match_len': val, 'is_rc': is_rc, 'score': score})

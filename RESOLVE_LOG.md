@@ -111,4 +111,89 @@ Line numbers below are for `mycode/lexic_hash.cpp` on this branch. Batch 1 addit
 
 ---
 
+## Batch 3 - branch `resolve-batch3` (starts from `main` after batch 2)
+Resolve-list items covered: 3 (scorer ablation) and 4 (one 0.2 threshold everywhere). One extra bug found on the way (3.3).
+No C++ code was changed in this batch; `mycode/lexic_hash.cpp` is as in batch 2.
+
+### 3.1 One threshold for every evaluation (item 4)
+**What was inconsistent.** Four different ways of deciding which read pairs are true overlaps were in use:
+`gengraphs.py` passed threshold 0 (every ground-truth alignment counts as true: 5,260 pairs on NCTC1080);
+the default of `get_gt_df` / `get_gt_df_nctc` in `metric_utils.py` was 0.3 with a strict `>` (3,335 pairs; this is what
+`trymetrics.py` in `LexicHash_1/` and `LexicHash_1orig/` used); the ROC/PRC plot scripts used 0.2 with `>=` (3,857 pairs);
+and `test.py` scripts do not threshold at all (top-k overlap with the longest ground-truth alignments).
+The LexicHash paper states 0.2 for the alignment fraction `a / (l1 + l2 - a)`, so 0.2 is now used everywhere.
+Results from the different scripts could not be compared before.
+
+| File | Lines | Type | Change |
+|---|---|---|---|
+| `evaluation/lh_eval.py` | L27 | NEW FILE (123 lines) | `THETA = 0.2`, the single definition. The file also holds `load_true_pairs` (L36-L61), `evaluate_arrays` (L87-L115) and the helpers; see 3.2. |
+| `LexicHash-main/LexicHash/utils/metric_utils.py`, `LexicHash_1/LexicHash/LexicHash/utils/metric_utils.py`, `LexicHash_1orig/LexicHash/LexicHash/utils/metric_utils.py`, `experiment with lexichash/LexicHash-main/LexicHash/utils/metric_utils.py` | L12, L16, L19, L26 (same lines in all four) | EDIT | L12 and L19: `min_theta=0.3` -> `min_theta=0.2`. L16 and L26: `thetas > min_theta` -> `thetas >= min_theta`. These are copies of the original LexicHash code, so they now differ from upstream here on purpose. |
+| `LexicHash-main/LexicHash/gengraphs.py` | L19 | EDIT | `get_gt_df(gt_path, seq_lens, 0)` -> `get_gt_df(gt_path, seq_lens)` (default 0.2). |
+| `test accuracy/roc_prc/plot.py` | L25-L28 | EDIT | Replaced the literal `jaccard_threshold = 0.2` by an import of `THETA` (L25-L27) and `jaccard_threshold = THETA` (L28). The value is the same; the source is now shared. |
+| `test accuracy/roc_prc/plot copy.py` | L38-L41 | EDIT | Same change. |
+| `comparisons/expwala/plot copy.py` | L9-L11 (add), L36 (edit) | EDIT | Import of `THETA`; `if jaccard >= 0.2` -> `if jaccard >= THETA`. |
+| `comparisons/multipleruns/plot copy.py` | L9-L11 (add), L39 (edit) | EDIT | Same change. |
+| `tests/test_threshold_consistency.py` | L1-L66 | NEW FILE | Fails if any `metric_utils.py` default differs from `THETA`, if a strict `>` is used, if a script passes an explicit threshold to `get_gt_df`, or if a plot script has its own literal. It fails on the old code and passes now. |
+
+**Not changed.** The `test.py` scripts (`test accuracy/`, `comparisons/*/`, `othermetric/`) report "top-k predicted pairs that are among the
+top-k longest ground-truth alignments". That is a different metric and has no threshold; keep it separate from ROC/PRC in the report.
+`plot.py` computes ROC/PRC only over the predicted pairs, so its curves stop early and the AUC is not comparable with `evaluation/lh_eval.py`
+(which counts all pairs). `pr_vs_k(..., thresh=300)` in `metric_utils.py` is the alignment-score threshold from the paper for a different plot and is left as is.
+
+### 3.2 Shared evaluator and scorer ablation (item 3)
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `evaluation/lh_eval.py` | L1-L123 | NEW FILE | Ground truth (alignment fraction >= 0.2) and metrics: ROC-AUC, PR-AUC, precision among the n_true best pairs. All C(n,2) pairs are included; pairs not returned count as score 0. Self-alignments (a read aligned to itself) are ignored; the P. falciparum ground truth has 911 of them above the threshold. |
+| `evaluation/scorer_ablation.py` | L1-L275 | NEW FILE | Compares max y, exp-decay (8 decays x 5 top_k), mean of top-k, count of masks with y >= t, and a likelihood-style sum, on the pairs the pipeline returns (alpha = 1, 2, 5, 10) and on all pairs, with and without reverse complements. Sketches and candidate pairs come from the C++ program. |
+| `evaluation/summarize_ablation.py` | L1-L106 | NEW FILE | Turns the CSV into the Markdown report. |
+| `evaluation/README.md` | L1-L59 | NEW FILE | How to run it and how to read it. |
+| `evaluation/results/scorer_ablation_NCTC1080.{csv,md}` | - | NEW FILES | 5 seeds without reverse complements; reverse-complement settings for seed 1 only (6 times slower). 500 masks. |
+| `evaluation/results/scorer_ablation_Pfalciparum.{csv,md}` | - | NEW FILES | 2 seeds, reverse complements on and off, 200 masks, alpha 2, 5, 10 (all-pairs pool skipped for time). |
+| `tests/README.md` | L8 and L60-L71 | EDIT / ADD | Documents the new tests. |
+
+**Checks of the ablation code.** Vectorised match lengths: 0 mismatches against `yscore()` in the Python code (6,000 values). Vectorised exp-decay:
+max difference 6e-14 against `expdecayscore()`. Evaluator: perfect scores give AUROC and AUPRC 1.0, random scores give 0.51 and the prevalence.
+The sparse evaluator gives the same numbers as the dense one on synthetic data with many ties.
+
+### 3.3 Bug: exp-decay re-ranker used the wrong sketch rows for reverse-strand pairs
+File: `experiment with lexichash/LexicHash-main/LexicHash/LexicHash.py`
+
+| Lines | Type | Change | Why |
+|---|---|---|---|
+| L59 | EDIT | `refine_match_pairs(pair_match_lens, sketches)` -> `refine_match_pairs(pair_match_lens, sketches, n_seq=n_seq)` | The function needs the number of reads to find the reverse-complement rows. |
+| L589 | EDIT | Added parameter `n_seq=None`. | Same. |
+| L595-L598 | ADD | Docstring lines for `sketches` (2*n_seq rows when reverse complements are on) and `n_seq`. | |
+| L609-L622 | EDIT | New branch: with reverse complements, a '+' pair uses rows (a, b) and (a', b'), a '-' pair uses rows (a, b') and (a', b) (a' = row of the reverse complement), per mask the larger match. The old single call `yscore(ind1, ind2, sketches)` stays as the else branch (L622). | **Bug fix.** The pair key holds read numbers below n_seq, so the old code always compared the forward rows of the two reads. For a '-' pair (read on one strand, mate on the other) that is the wrong comparison. This is the same rule the pair search uses (`bottom_up_pair_aggregation`). |
+| `tests/test_refine_strand.py` L1-L39 | NEW FILE | | Hand-built sketches with a perfect '-' overlap: the pair scores the maximum with the fix and fails on the old code (TypeError, no `n_seq`). The fixed Python function also agrees with the vectorised scorer to 1e-13 on 600 real P. falciparum candidate pairs. |
+
+### 3.4 Results (what the ablation shows)
+Numbers are AUPRC, mean +- std over mask seeds, ground truth theta >= 0.2. Full tables: `evaluation/results/*.md`.
+
+**NCTC1080, no reverse complements, 5 seeds, 500 masks.** The pairs the pipeline returns contain 23.7% (alpha 1), 46% (alpha 2), 95.3% (alpha 5) and 98.6% (alpha 10) of the true pairs.
+
+| Pool | max y | exp-decay, as in code (decay 0.1, top_k 100) | exp-decay, best of grid (decay 0.01; top_k all / 100 / 50) | mean of top-k y, best k (100 / 100 / 50) |
+|---|---|---|---|---|
+| alpha 1 | 0.221 +- 0.002 | 0.240 +- 0.002 | 0.241 +- 0.001 | 0.241 +- 0.001 |
+| alpha 5 | 0.825 +- 0.007 | 0.915 +- 0.005 | 0.930 +- 0.004 | 0.932 +- 0.004 |
+| all pairs | 0.846 +- 0.006 | 0.948 +- 0.002 | 0.960 +- 0.001 (top_k 50) | 0.961 +- 0.001 (top_k 50) |
+
+**P. falciparum, 2 seeds, 200 masks, alpha 10** (the pool contains 39% to 58% of the true pairs depending on the setting).
+
+| Setting | max y | exp-decay (0.1, 100) | best exp-decay | mean of top-k |
+|---|---|---|---|---|
+| reverse complements, strand-aware rows (fixed) | 0.124 +- 0.059 | 0.461 +- 0.056 | 0.473 +- 0.059 | 0.470 +- 0.060 |
+| reverse complements, forward rows only (old code) | 0.120 +- 0.057 | 0.298 +- 0.057 | 0.317 +- 0.055 | 0.313 +- 0.055 |
+| no reverse complements | 0.083 +- 0.045 | 0.270 +- 0.036 | 0.277 +- 0.035 | 0.272 +- 0.033 |
+
+**Conclusions that the data support.**
+1. A score that uses many masks beats the original max-of-masks score on both datasets, in every seed: +0.09 AUPRC at alpha 5 on NCTC1080 and +0.34 (strand-aware, alpha 10) on P. falciparum.
+2. The exponential weighting itself is not what helps. A plain mean of the top-k matches does as well (within 0.005 AUPRC in every setting), and on NCTC1080 AUPRC rises monotonically as the decay gets smaller (best at the smallest value tried, 0.01, where the weights are nearly flat). The paper should say "aggregating evidence over many masks", not claim a benefit of the exponential form, unless a further experiment shows one. The default `decay = 0.1` is slightly worse than 0.01 on NCTC1080 (-0.015 AUPRC at alpha 5).
+3. The gain depends on the pool. At alpha 1 only 24% of the true pairs are inside the pool on NCTC1080, so AUROC cannot move and AUPRC gains only +0.02. The scorer matters most when alpha is 5 or more.
+4. The strand fix (3.3) matters on mixed-strand data: +0.16 AUPRC at alpha 10 on P. falciparum. On NCTC1080 it makes no difference because the data are effectively single-strand (all ground-truth lines are '+', and for 97.6% of the true pairs the same-strand sketches give the longer match). Running with reverse complements on a single-strand dataset costs a lot there (seed 1, alpha 5, max y: 0.83 without vs 0.38 with strand-aware rows), because the reverse strand adds chance candidates.
+5. The count-of-masks and likelihood-style scores are not better than exp-decay.
+
+**Limits.** "Best of grid" is chosen on the same data. P. falciparum has only 2 seeds with a large spread between them (std about 0.05), the NCTC1080 reverse-complement settings only 1 seed, and 200 masks were used on P. falciparum (500 on NCTC1080). The E. coli dataset for the runtime benchmark would be a third check.
+
+---
+
 <!-- Add each new batch below this line using the same layout. -->

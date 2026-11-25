@@ -16,7 +16,7 @@ seq_lens = np.array([len(seq) for seq in seqs])
 
 print('seq_lens', seq_lens)
 
-gt_df = get_gt_df( gt_path, seq_lens, 0 )
+gt_df = get_gt_df( gt_path, seq_lens )  # default min_theta = 0.2, same as evaluation/lh_eval.py
 
 #store to csv
 gt_df.to_csv('gt_df.csv', index=False)
