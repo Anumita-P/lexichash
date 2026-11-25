@@ -44,16 +44,15 @@ def parse_args():
 
 
 def merge_prediction_files(paths):
-    merged = {}
-    for path in paths:
-        df = pd.read_csv(path, sep="\t", header=None, names=["i1", "i2", "score", "direction"])
-        for _, row in df.iterrows():
-            key = (int(row.i1), int(row.i2), row.direction)
-            score = int(row.score)
-            if key not in merged or score > merged[key]:
-                merged[key] = score
-    merged_df = pd.DataFrame([(i1, i2, score, d) for (i1, i2, d), score in merged.items()],
-                             columns=["i1", "i2", "score", "direction"])
+    # Keep, for every (i1, i2, direction), the largest score over all stages.
+    # (Resolve-list item 10: same result as the old row-by-row loop with iterrows(), which took
+    # minutes for the million-row stage files; groupby(...).max() takes seconds. See tests/.)
+    frames = [pd.read_csv(path, sep="\t", header=None, names=["i1", "i2", "score", "direction"])
+              for path in paths]
+    all_rows = pd.concat(frames, ignore_index=True)
+    merged_df = (all_rows.groupby(["i1", "i2", "direction"], sort=False)["score"].max()
+                 .reset_index()[["i1", "i2", "score", "direction"]])
+    merged_df["score"] = merged_df["score"].astype(int)
     return merged_df
 
 
