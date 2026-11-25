@@ -67,4 +67,48 @@ File: `mycode/lexic_hash.cpp` (CRLF line endings kept as in the original)
 
 ---
 
+## Batch 2 - branch `resolve-batch2` (starts from `resolve-batch1`)
+Resolve-list item covered: 7 (C++ input handling: gzip, N bases, short reads, shared-map race).
+Line numbers below are for `mycode/lexic_hash.cpp` on this branch. Batch 1 additions earlier in the file moved down (for example `get_masks` is now at L98).
+
+### 2.1 C++: read gzip-compressed FASTA directly
+| Lines | Type | Change | Why |
+|---|---|---|---|
+| L3 | ADD | `#include <zlib.h>` | `gzopen` / `gzgets` read both plain and gzip files with one code path. |
+| old L18-L44 -> new L33-L93 | EDIT | `read_fasta` rewritten: `ifstream` replaced by `gzFile fp = gzopen(...)` (L41), a 1 MiB read buffer (`gzbuffer`, L46) and a line reader built on `gzgets` (L71-L82) that also copes with long lines, CRLF endings (L50-L51) and a last line with no newline (L81-L82). | The Python code reads `.fasta.gz` directly (`pyfastx`), but the C++ program could only read plain text, so a `.gz` file gave garbage and users had to decompress by hand. Tested: the gzip output is identical to the plain output. |
+| `README.md` L9 | EDIT | Added `-lz` to the build command. | zlib must be linked now. |
+
+### 2.2 C++: N and other non-ACGT characters
+| Lines | Type | Change | Why |
+|---|---|---|---|
+| L37-L38, L64-L68 | EDIT (inside the rewritten `read_fasta`) | Each character goes through `BASE_CODE`; lower case is upper-cased and anything that is not A, C, G or T is dropped. | **Bug fix.** Before, an `N` (or any IUPAC code) was looked up with `BASE_TO_INT[c]`, which silently inserted the key with value 0, so every N became an A and created false matches. The Python code (`clean_seqs` in `seq_utils.py`) deletes these characters, so now both agree. |
+| L59-L62 | ADD | A sequence line that appears before any `>` header starts a record. | Keeps the old behaviour for header-less files. |
+
+### 2.3 C++: data race on the shared base table
+| Lines | Type | Change | Why |
+|---|---|---|---|
+| L19-L31 | ADD | New read-only `BASE_CODE` array (256 entries, -1 for non-bases). The old `BASE_TO_INT` map (L16-L17) is kept but no longer used for sketching. | **Bug fix.** `to_int_seq` ran inside the OpenMP loop in `sketching()` and called `BASE_TO_INT[c]`. `operator[]` on an `unordered_map` inserts when the key is missing, so several threads could write to the same global map at once when they met an unknown character (undefined behaviour, can crash or corrupt results). A plain array is only read, so it is thread-safe. |
+| old L154 -> new L200-L209 | EDIT | `to_int_seq` uses `BASE_CODE` and calls `abort()` with a message if it ever sees a non-base. | After 2.2 this cannot happen, and failing loudly is better than silently treating it as A. |
+
+### 2.4 C++: short reads no longer shift the read numbers
+| Lines | Type | Change | Why |
+|---|---|---|---|
+| old L31 and L41 -> removed | DEL (inside `read_fasta`) | Removed the `if (current_seq.size() >= max_k)` filters that dropped short reads before numbering. | **Bug fix.** The output file lists reads by 1-based number. After a short read was dropped, every later read had the wrong number, so the pairs no longer matched the FASTA record numbers or the ground-truth files used for ROC/PRC evaluation. |
+| L85-L91 | ADD | Counts reads shorter than `max_k` (after removing non-ACGT) and prints a warning with the count. | The user should know how many reads are left out. |
+| L515 | unchanged | `if (seqs[i].size() < max_k) continue;` in `sketching()` already existed. Short reads now reach this line, get an empty sketch and are skipped; `get_matching_sets` already ignores empty sketches (L684). | A short read keeps its number but never appears in a pair. Note: the Python code instead pads short reads, so it can pair them; this is a known difference for reads shorter than `max_k`. |
+
+### 2.5 New test
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `tests/test_input_handling.py` | L1-L172 | NEW FILE | Five checks on small synthetic FASTA files: gzip = plain; CRLF and no final newline; N / IUPAC / lower case equal the cleaned read; short read keeps its number (output equals the run without it, shifted by one); `--n_cpu 1` equals `--n_cpu 8` on N-heavy input. |
+| `tests/README.md` | L8 (edit), L44-L58 (add) | EDIT / ADD | Added `-lz` to the build line and a section describing the new test and the input rules. |
+
+**Test results.** New binary: all checks pass. The equivalence test against Python (`tests/equivalence_py_vs_cpp.py`, 50 masks, alpha 1) is still IDENTICAL: 0 of 100,300 sketch cells differ, and all 1,003 pairs match. The same input checks on the batch-1 binary: the N check, the short-read check (320 pairs differ) and the gzip check all fail, so the tests catch the bugs.
+
+### 2.6 Not changed / still open
+- FASTQ input (the Python code accepts it through `pyfastx`): not supported in C++ yet.
+- Short reads are skipped in C++ but padded in Python (see 2.4).
+
+---
+
 <!-- Add each new batch below this line using the same layout. -->

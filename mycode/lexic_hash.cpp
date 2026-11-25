@@ -1,5 +1,6 @@
 #include <bits/stdc++.h>
 #include <omp.h> // OpenMP
+#include <zlib.h> // reads plain and gzip-compressed FASTA (link with -lz)
 // #include <seqan3/io/sequence_file/input.hpp>
 
 using namespace std;
@@ -15,35 +16,81 @@ vector<vector<int>> shared_masks;
 unordered_map<char, int> BASE_TO_INT = {
     {'A', 0}, {'T', 1}, {'G', 2}, {'C', 3}, {'a', 0}, {'t', 1}, {'g', 2}, {'c', 3}};
 
+// Read-only lookup table used while sketching: A=0, T=1, G=2, C=3 (either case), -1 for
+// any other byte. Unlike BASE_TO_INT[...] (operator[] inserts missing keys), this never
+// writes, so it is safe to use from several OpenMP threads at once.
+static const array<int8_t, 256> BASE_CODE = []()
+{
+    array<int8_t, 256> t;
+    t.fill(-1);
+    t['A'] = t['a'] = 0;
+    t['T'] = t['t'] = 1;
+    t['G'] = t['g'] = 2;
+    t['C'] = t['c'] = 3;
+    return t;
+}();
+
+// Reads a FASTA file, plain or gzip-compressed (gzopen reads both).
+// * Every record is kept, in file order, so sequence i in the output is record i of the
+//   file. Reads shorter than max_k are NOT removed (that used to shift all later
+//   indices); they stay in the numbering but are not sketched, see sketching().
+// * Lower case is converted to upper case and every character other than A, C, G, T
+//   (N, IUPAC codes, ...) is deleted, the same as clean_seqs() in the Python code.
 vector<string> read_fasta(const string &fasta_path, size_t max_k) {
     vector<string> seqs;
-    ifstream infile(fasta_path);
-    if (!infile) {
+    gzFile fp = gzopen(fasta_path.c_str(), "rb");
+    if (!fp) {
         cerr << "Error opening file: " << fasta_path << "\n";
         return seqs;
     }
+    gzbuffer(fp, 1 << 20);
 
-    string line, current_seq;
-    while (getline(infile, line)) {
-        if (line.empty()) continue;
-        if (line[0] == '>') {
-            if (!current_seq.empty()) {
-                if (current_seq.size() >= max_k)
-                    seqs.push_back(current_seq);
-                current_seq.clear();
-            }
-        } else {
-            current_seq += line;
+    bool in_record = false;
+    auto handle_line = [&](string &l) {
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r'))
+            l.pop_back();
+        if (l.empty())
+            return;
+        if (l[0] == '>') {
+            seqs.emplace_back();
+            in_record = true;
+            return;
+        }
+        if (!in_record) { // sequence without a header line: treat as one record
+            seqs.emplace_back();
+            in_record = true;
+        }
+        string &cur = seqs.back();
+        for (char c : l) {
+            int code = BASE_CODE[(unsigned char)c];
+            if (code >= 0)
+                cur += "ATGC"[code];
+        }
+    };
+
+    const int BUF = 1 << 16;
+    vector<char> buf(BUF);
+    string line;
+    while (gzgets(fp, buf.data(), BUF)) {
+        line.append(buf.data());
+        if (line.back() == '\n') {
+            handle_line(line);
+            line.clear();
         }
     }
+    if (!line.empty())
+        handle_line(line); // last line without a trailing newline
+    gzclose(fp);
 
-    // Add last sequence
-    if (!current_seq.empty() && current_seq.size() >= max_k)
-        seqs.push_back(current_seq);
-
+    size_t n_short = 0;
+    for (const auto &q : seqs)
+        if (q.size() < max_k)
+            ++n_short;
+    if (n_short > 0)
+        cerr << "Warning: " << n_short << " of " << seqs.size() << " sequences are shorter than max_k=" << max_k
+             << " after removing non-ACGT characters; they keep their index but are not sketched\n";
     return seqs;
 }
-
 
 long long mask_seed = -1; // set with --seed; negative means "use random_device"
 string mask_file_path;    // set with --mask_file
@@ -151,7 +198,15 @@ vector<int> to_int_seq(const string &seq)
 {
     vector<int> int_seq(seq.size());
     for (size_t i = 0; i < seq.size(); ++i)
-        int_seq[i] = BASE_TO_INT[seq[i]];
+    {
+        int code = BASE_CODE[(unsigned char)seq[i]];
+        if (code < 0) // cannot happen: read_fasta keeps only A, C, G, T
+        {
+            cerr << "Internal error: unexpected character in sequence\n";
+            abort();
+        }
+        int_seq[i] = code;
+    }
     return int_seq;
 }
 

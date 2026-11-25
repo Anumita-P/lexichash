@@ -5,7 +5,7 @@
 the sketch matrix and the pairs found by the prefix-tree step.
 
 ```bash
-g++ -std=c++17 -fopenmp mycode/lexic_hash.cpp -o lexichash -O3 -march=native
+g++ -std=c++17 -fopenmp mycode/lexic_hash.cpp -o lexichash -O3 -march=native -lz
 pip install numpy pandas pyfastx tqdm matplotlib scikit-learn
 python3 tests/equivalence_py_vs_cpp.py --cpp-bin ./lexichash \
     --fasta LexicHash-main/data/NCTC1080/NCTC1080_reads.fasta.gz \
@@ -41,3 +41,18 @@ python3 tests/equivalence_py_vs_cpp.py --cpp-bin ./lexichash \
    `--max_k 24` it hashed 32-mers (sketch values up to about 1.7e19) and then
    read the wrong bits in the tree. The globals now follow the flags, and
    max_k above 32 is rejected.
+
+## Input handling test (batch 2)
+
+`test_input_handling.py` runs the C++ binary on small synthetic FASTA files and checks that
+gzip input, CRLF line endings, N / IUPAC / lower-case characters, short reads and the thread
+count do not change the result in unexpected ways (details in the file header).
+
+```bash
+python3 tests/test_input_handling.py --cpp-bin ./lexichash
+```
+
+The C++ program now needs zlib (`-lz`) because it reads `.fasta.gz` directly; no need to
+decompress first. Characters other than A, C, G, T are removed and lower case is upper-cased,
+as in the Python code. Reads shorter than `max_k` keep their position in the numbering and are
+simply not sketched, so output indices always equal the record number in the FASTA file.
