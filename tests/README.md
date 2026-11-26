@@ -69,3 +69,15 @@ python3 tests/test_threshold_consistency.py
 python3 tests/test_refine_strand.py
 ```
 
+## Mask-strategy and multi-scale tests (batch 4)
+
+* `test_mask_strategies.py` checks the inverse-frequency and GC samplers on toy reads with known answers (the old code is kept in the
+  file for comparison), and that every strategy in `evaluation/mask_strategies.py` is reproducible from its seed and writes a valid mask file.
+* `test_multiscale_sketch.py` checks the sketch function and the vectorised match lengths of `evaluation/multiscale_eval.py` against brute force.
+* `test_merge_stages.py` checks that the vectorised `merge_prediction_files` returns the same rows as the old loop.
+
+```bash
+python3 tests/test_mask_strategies.py
+python3 tests/test_multiscale_sketch.py
+python3 tests/test_merge_stages.py
+```

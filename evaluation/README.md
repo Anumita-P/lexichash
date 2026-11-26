@@ -57,3 +57,19 @@ complements on, but `y` taken from the forward rows only, which is what `refine_
 * Match lengths are read from the sketches produced by the C++ program, which is identical to the Python
   code on the same masks (`tests/equivalence_py_vs_cpp.py`). The vectorised `y` and exp-decay scores were
   checked against `yscore()` and `expdecayscore()` in the Python code (0 mismatches in 6,000 values).
+
+## Mask strategies and multi-scale (batch 4)
+
+```bash
+# 9 mask strategies, one run of the C++ binary per strategy and seed (about 45 s each at 500 masks)
+python3 evaluation/mask_ablation.py --cpp-bin build/lexichash --fasta NCTC1080_reads.fasta.gz \
+    --gt NCTC1080_daligner_ground_truth.txt --n-hash 500 --seeds 1 2 3 4 5 --out evaluation/results/mask_ablation_NCTC1080_h500
+python3 evaluation/summarize_batch4.py masks evaluation/results/mask_ablation_NCTC1080_h500.csv > evaluation/results/mask_ablation_NCTC1080_h500.md
+
+# the four-stage multi-scale pipeline of LexicHash_1/run_module.py, with controls (about 7 min per seed on 2 cores)
+python3 evaluation/multiscale_eval.py --fasta NCTC1080_reads.fasta.gz --gt NCTC1080_daligner_ground_truth.txt \
+    --seeds 1 2 3 --out evaluation/results/multiscale_NCTC1080
+```
+
+Add `--rc` to `mask_ablation.py` for data with both strands (about 6x slower). The runs use CPU only (the C++ code uses OpenMP threads,
+the scoring uses numpy); more cores make them faster, a GPU does not.

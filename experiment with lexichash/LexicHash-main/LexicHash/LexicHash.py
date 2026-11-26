@@ -274,12 +274,15 @@ def get_masks_freq_weighted(n_masks, max_k, sequences):
     # Count k-mer frequencies
     kmer_counts = Counter(kmers)
 
-    # Assign inverse frequency weights
-    weights = np.array([1 / (kmer_counts[k] + 1) for k in kmers])
+    # Inverse-frequency weights, ONE PER DISTINCT k-mer. (Resolve-list item 9: the old code gave one
+    # weight 1/(count+1) to every OCCURRENCE in `kmers`, so a k-mer seen c times was drawn with
+    # probability proportional to c/(c+1), i.e. almost uniformly, not inversely to its frequency.)
+    distinct = list(kmer_counts.keys())
+    weights = np.array([1.0 / kmer_counts[k] for k in distinct])
     probs = weights / weights.sum()
 
-    # Sample k-mers according to probabilities
-    sampled = np.random.choice(kmers, size=n_masks, p=probs)
+    # Sample distinct k-mers according to probabilities
+    sampled = np.random.choice(distinct, size=n_masks, p=probs)
 
     masks = np.array([[BASE_TO_INT[c] for c in k] for k in sampled])
     print(masks)
@@ -295,12 +298,16 @@ def get_masks_cluster_gc(n_masks, max_k, sequences):
 
     low_gc, high_gc = [], []
 
-    # Split sequences into low-GC and high-GC
+    # Split sequences into low-GC and high-GC at the MEDIAN read GC. (Resolve-list item 9: the old
+    # fixed threshold 0.5 put only 6 of the 1,003 NCTC1080 reads in the high-GC pool, so half of all
+    # masks came from those 6 reads; P. falciparum (about 19% GC) would have had an empty pool.)
+    gcs = [(seq.count('G') + seq.count('C')) / len(seq) for _, seq in sequences if seq]
+    threshold = float(np.median(gcs)) if gcs else 0.5
     for _, seq in sequences:
         if not seq:  # skip empty
             continue
         gc_content = (seq.count('G') + seq.count('C')) / len(seq)
-        if gc_content > 0.5:
+        if gc_content > threshold:
             high_gc.append(seq)
         else:
             low_gc.append(seq)

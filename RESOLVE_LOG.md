@@ -196,4 +196,126 @@ Numbers are AUPRC, mean +- std over mask seeds, ground truth theta >= 0.2. Full 
 
 ---
 
+## Batch 4 - branch `resolve-batch4` (starts from `main` after batch 3)
+Resolve-list items covered: 9 (mask strategies) and 10 (multi-scale).
+
+### 4.0 What was found (before any change)
+
+Mask strategies (`experiment with lexichash/LexicHash-main/LexicHash/LexicHash.py`, L226-L392):
+1. **None of the five strategy functions is called anywhere.** `find_overlaps` (L45) always calls `get_masks`
+   (random). The results in `othermetric/` were made with hand-edited copies, use the global numpy random state and
+   no seed, so they cannot be reproduced from the repo. `othermetric/test.py` also ranks pairs by an integer match
+   length with thousands of ties (the `kmax32` files hold 17,000-27,000 pairs, most with length 14-16), so its
+   "top-k" numbers depend on the order of lines in the file.
+2. **`get_masks_freq_weighted` is not inverse-frequency.** It gives every k-mer *occurrence* the weight
+   `1/(count+1)`; a k-mer seen `c` times is therefore drawn with probability proportional to `c/(c+1)`, which is
+   close to uniform over occurrences (it even prefers repeated k-mers slightly). On NCTC1080 the mean count of a
+   drawn k-mer is 1.00-1.01: with noisy long reads almost every 32-mer occurs once, so even a correct
+   inverse-frequency sampler has almost no frequency signal to use there.
+3. **`get_masks_cluster_gc` splits reads at a fixed GC of 0.5.** On NCTC1080 only 6 of 1,003 reads are above 0.5
+   (mean GC 0.39), so half of all masks came from 6 reads. On P. falciparum (mean read GC 0.24) only 1.2% of the 2,000 reads are above 0.5.
+4. **`get_masks_progressive_refresh` is not a rolling buffer** (the report says it is) and not "70% from the full
+   dataset": it takes one 32-mer from each of the *first 300 reads*, draws 30% of the masks from them *with
+   replacement* (duplicates: on average 468 unique masks of 500) and fills the rest with purely random masks.
+5. The report says masks were "implemented in Python" and tested "with nhash = 20 on 2,000 pairs"; the 20-mask
+   comparison has a standard deviation of about 0.02 AUPRC between seeds, so single runs cannot rank strategies.
+
+Multi-scale (`LexicHash_1/LexicHash/run_module.py`):
+6. **The stages in the code are not the stages in the report.** Report: (127,256), (63,128), (31,64), (14,32).
+   Code: (63,128) 700 masks, (31,64) 600, (14,32) 600, (13,16) 400. There is no (127,256) stage, and stage 4
+   (13-16) lies inside the range of stage 3 (14-32).
+7. **The merge keeps the maximum raw match length over stages**, so scores from different scales (up to 128 vs up
+   to 16) are compared directly, and the merged score has only 56-58 distinct values over 502,503 pairs.
+8. **Total masks are 2,300 against 500 for the naive method**, so any comparison to naive LexicHash mixes "more
+   scales" with "more masks".
+9. `merge_prediction_files` loops over every row with `iterrows()` (slow for million-row stage files).
+
+### 4.1 Python: inverse-frequency weights per distinct k-mer
+File `experiment with lexichash/LexicHash-main/LexicHash/LexicHash.py`, function `get_masks_freq_weighted`.
+EDIT old L277-L278 -> new L277-L281 (comment, `distinct = list(kmer_counts.keys())`, `weights = np.array([1.0 / kmer_counts[k] for k in distinct])`),
+EDIT old L281 -> new L284 (`np.random.choice(distinct, ...)`).
+
+**Why:** the weights are now one per distinct k-mer and proportional to `1/count`, which is what the report describes.
+Checked by `tests/test_mask_strategies.py` (toy reads with known counts: share of count-1 k-mers 0.422 with the old code against the
+expected 3/7, 0.657 with the new code against the expected 2/3).
+
+### 4.2 Python: GC split at the median read GC
+Same file, function `get_masks_cluster_gc`. EDIT old L298 -> new L301-L305 (median threshold `threshold = float(np.median(gcs))`) and
+EDIT old L303 -> new L310 (`gc_content > threshold`).
+
+**Why:** both pools are populated. Test: with 6 GC-rich reads out of 200, the old code took 51% of its masks from those
+6 reads, the new code 3%.
+
+### 4.3 Python: vectorised merge of the stage files
+File `LexicHash_1/LexicHash/run_module.py`, function `merge_prediction_files`. EDIT old L47-L56 -> new L47-L55 (CRLF file).
+The row loop became `pd.concat` + `groupby(["i1","i2","direction"]).score.max()`. **Why:** same rows, much faster.
+`tests/test_merge_stages.py` compares old and new on 4 random stage files (5,785 merged rows, identical).
+
+### 4.4 NEW FILE `evaluation/mask_strategies.py` (227 lines)
+All nine strategies (random, blend, invfreq_orig, invfreq_fixed, solid, gc_orig, gc_median, mutated, buffered) as functions
+of `(reads, n, max_k, rng)`, reproducible from a seed, plus `write_mask_file` for `lexic_hash --mask_file`.
+`invfreq_orig` and `gc_orig` are ports of the old code, kept so the old behaviour can be compared with the fix.
+`solid` (uniform over distinct k-mers seen in at least 2 reads) is a control.
+
+### 4.5 NEW FILE `evaluation/mask_ablation.py` (106 lines)
+For each strategy and seed it writes the masks, runs the C++ binary with them, scores all pairs and the alpha*n candidate pairs
+with max y and exp-decay (0.1, 100) and evaluates with `lh_eval.py`. Results: `evaluation/results/mask_ablation_NCTC1080_h{20,500}.{csv,md}`.
+
+### 4.6 NEW FILE `evaluation/multiscale_eval.py` (218 lines)
+Re-creates the four stages of `run_module.py` with exact, vectorised y-values (sketches follow `lexicographic_first`),
+including the per-stage `min_k` and alpha*n pool, and the max merge; plus controls with the same number of masks at one scale,
+and a pooled exp-decay merge. Results: `evaluation/results/multiscale_NCTC1080.{csv,md}`.
+
+### 4.7 NEW FILES `evaluation/summarize_batch4.py` (69 lines) and tests
+`tests/test_mask_strategies.py` (175 lines), `tests/test_multiscale_sketch.py` (71 lines; `lexicographic_first` equals brute force in 160 of 160 cases for
+k 16-128, `y_all_pairs` equals the base-by-base prefix in all values), `tests/test_merge_stages.py` (62 lines).
+
+### 4.8 Results
+
+NCTC1080, no reverse complements, ground truth theta >= 0.2, AUPRC, mean +- std over seeds. Full tables with intervals: `evaluation/results/*.md`.
+
+**Mask strategies, 500 masks, 5 seeds (the real operating point).** Every strategy is within 0.01 AUPRC of random masks with max y
+and within 0.005 with exp-decay (all intervals for the difference to random contain 0 except `gc_orig` with max y, -0.006 [-0.011, -0.002],
+and `buffered` with exp-decay, -0.003 [-0.006, -0.000]).
+
+| score, pool | random | invfreq_orig | invfreq_fixed | gc_orig | gc_median | blend | mutated | buffered | solid |
+|---|---|---|---|---|---|---|---|---|---|
+| max y, all pairs | 0.852 | 0.851 | 0.845 | 0.845 | 0.846 | 0.843 | 0.848 | 0.847 | 0.832 |
+| exp-decay, all pairs | 0.951 | 0.953 | 0.953 | 0.952 | 0.953 | 0.951 | 0.951 | 0.948 | 0.951 |
+| exp-decay, alpha 5 pool | 0.922 | 0.920 | 0.920 | 0.920 | 0.917 | 0.920 | 0.922 | 0.917 | 0.903 |
+
+**Mask strategies, 20 masks (the setting of the report), 20 seeds.** Std between seeds is about 0.02, so the ranking is noisy.
+With all pairs scored, no strategy beats random (0.455 max y, 0.491 exp-decay); `gc_orig` is worse by 0.025 [0.007, 0.042] (max y) and
+0.022 [0.008, 0.036] (exp-decay), `invfreq_orig` by 0.017 / 0.018, and `mutated` by 0.012 [-0.001, 0.024] / 0.013. Only inside the alpha-5 candidate pool do masks made of
+k-mers that occur in at least two reads help (`solid`: +0.016 / +0.022 over random, intervals above 0).
+
+**Multi-scale, 3 seeds, 500 masks single-scale baseline against 2,300 masks.**
+
+| method | masks | AUPRC |
+|---|---|---|
+| multi-scale as coded (max of reported lengths) | 2300 | 0.858 +- 0.004 |
+| stage 1 alone (k 63-128) | 700 | 0.010 (returns no pair at all: noisy reads almost never share 63 bases) |
+| stage 2 alone (k 31-64) | 600 | 0.395 |
+| stage 3 alone (k 14-32) | 600 | 0.851 +- 0.013 |
+| stage 4 alone (k 13-16) | 400 | 0.642 |
+| single scale k=32, max y | 500 / 2300 | 0.849 / 0.836 |
+| single scale k=32, exp-decay (0.1, 100) | 500 / 2300 | 0.949 / 0.941 |
+| multi-scale, y/max_k pooled over all masks, exp-decay (0.1, 100) | 2300 | 0.960 +- 0.002 |
+
+**Conclusions that the data support.**
+1. The mask strategies do not matter at 500 masks, and the report's statement that the mutated strategy is slightly better than random is
+   not supported (-0.003 [-0.008, 0.002] with max y; -0.012 with 20 masks). The honest statement for the paper is "no tested strategy differs from random masks".
+2. The idea behind inverse-frequency and GC sampling does not apply to this data: almost every 32-mer occurs once, and one dataset has almost no GC spread.
+   Both original versions were also implemented incorrectly (4.0, items 2 and 3); after the fix they are still not better than random.
+3. Multi-scale as coded gives 0.858 against 0.849 for naive max-y with 500 masks, but its own k=14-32 stage (600 masks) gives 0.851, i.e. the gain is the extra
+   masks of one stage. Stage 1 is empty on this data, stage 2 is poor, the max merge compares match lengths on different scales and creates ties.
+   Merging the same information with exp-decay after scaling by max_k gives 0.960 (+0.011 over the best single-scale exp-decay, 0.949), a real but small gain
+   that needs the y-values of every mask, which `run_module.py` does not keep.
+
+**Limits.** NCTC1080 only (no reverse complements). P. falciparum was not run: with reverse complements the 9 strategies x seeds would take about 6x longer
+and its GC spread is even narrower (1.2% of reads above 0.5). Multi-scale has 3 seeds. The multi-scale pool emulation breaks ties at random, which is how
+the original prefix-tree step behaves only on average. The best-of-grid style choice was not used here (one fixed scorer, exp-decay 0.1 / 100).
+**Not changed:** the multi-scale max merge in `run_module.py`, the strategy functions that are still not wired into `find_overlaps`
+(no `--mask_strategy` option yet); both are decisions for item 11 (what the paper claims).
+
 <!-- Add each new batch below this line using the same layout. -->
