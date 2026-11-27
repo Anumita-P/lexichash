@@ -27,6 +27,7 @@ Definitions tried by --calibrate
            max  max(A, B)
   agg    : max  longest single alignment of the ordered pair (default)
            sum  sum over all alignments of the pair (DALIGNER often reports several pieces)
+           span from the start of the first piece to the end of the last piece
 """
 import argparse
 import itertools
@@ -39,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lh_eval import THETA, load_true_pairs, read_lengths  # noqa: E402
 
 LINE = re.compile(
-    r"^\s*(\d+)\.\d+\s+(\d+)\.\d+\s+([nc])\s+"
+    r"^\s*([\d,]+)\.\d+\s+([\d,]+)\.\d+\s+([nc])\s+"
     r"[\[<]\s*([\d,]+)\s*\.\.\s*([\d,]+)\s*[\]>]\s+x\s+"
     r"[\[<]\s*([\d,]+)\s*\.\.\s*([\d,]+)\s*[\]>]")
 
@@ -52,7 +53,7 @@ UNPARSED = []   # alignment-looking lines that the pattern did not recognise (fi
 
 
 def parse_lashow(path):
-    """List of (a_read0, b_read0, strand, a_len, b_len); read numbers 0-based.
+    """List of (a_read0, b_read0, strand, a_len, b_len, a_begin, a_end, b_begin, b_end); reads 0-based.
 
     For complement ('c') alignments LAshow prints the B interval backwards (start > end),
     so lengths are absolute differences."""
@@ -64,10 +65,11 @@ def parse_lashow(path):
                 if line.strip() and ".." in line:
                     UNPARSED.append(line.rstrip())
                 continue
-            a, b, st = int(m.group(1)) - 1, int(m.group(2)) - 1, m.group(3)
-            alen = abs(_num(m.group(5)) - _num(m.group(4)))
-            blen = abs(_num(m.group(7)) - _num(m.group(6)))
-            recs.append((a, b, st, alen, blen))
+            a, b, st = _num(m.group(1)) - 1, _num(m.group(2)) - 1, m.group(3)
+            ab, ae = _num(m.group(4)), _num(m.group(5))
+            b1, b2 = _num(m.group(6)), _num(m.group(7))
+            bb, be = min(b1, b2), max(b1, b2)
+            recs.append((a, b, st, abs(ae - ab), be - bb, ab, ae, bb, be))
     return recs
 
 
@@ -84,17 +86,27 @@ def measure(alen, blen, a_def):
 
 
 def build(recs, strand, a_def, agg):
-    """dict (i, j) -> (a, strand_char) for ordered pairs, i != j."""
-    out = {}
-    for a, b, st, alen, blen in recs:
+    """dict (i, j) -> (a, '+') for ordered pairs, i != j.
+
+    agg: max  longest single alignment piece
+         sum  sum of the pieces
+         span extent from the first piece start to the last piece end (on each read)"""
+    out, ext = {}, {}
+    for a, b, st, alen, blen, ab, ae, bb, be in recs:
         if a == b or (strand == "n" and st != "n"):
             continue
-        v = measure(alen, blen, a_def)
         key = (a, b)
+        if agg == "span":
+            d = ext.setdefault(key, [ab, ae, bb, be])
+            d[0], d[1], d[2], d[3] = min(d[0], ab), max(d[1], ae), min(d[2], bb), max(d[3], be)
+            continue
+        v = measure(alen, blen, a_def)
         if agg == "sum":
             out[key] = out.get(key, 0.0) + v
         elif v > out.get(key, 0.0):
             out[key] = v
+    for key, d in ext.items():
+        out[key] = measure(d[1] - d[0], d[3] - d[2], a_def)
     return {k: (v, "+") for k, v in out.items()}
 
 
@@ -133,7 +145,7 @@ def calibrate(recs, fasta, reference, workdir):
     print(hdr)
     print("-" * len(hdr))
     rows = []
-    for strand, a_def, agg in itertools.product(("n", "both"), ("A", "B", "mean", "max"), ("max", "sum")):
+    for strand, a_def, agg in itertools.product(("n", "both"), ("A", "B", "mean", "max"), ("max", "sum", "span")):
         pairs = build(recs, strand, a_def, agg)
         tmp = write_tmp(pairs, os.path.join(workdir, "_cal_tmp.txt"))
         true = load_true_pairs(tmp, lens)
@@ -194,7 +206,7 @@ def main():
     ap.add_argument("--calibrate", action="store_true", help="try all definitions against --reference")
     ap.add_argument("--strand", choices=("n", "both"), default="n")
     ap.add_argument("--a-def", choices=("A", "B", "mean", "max"), default="A")
-    ap.add_argument("--agg", choices=("max", "sum"), default="max")
+    ap.add_argument("--agg", choices=("max", "sum", "span"), default="max")
     ap.add_argument("--diagnose", action="store_true",
                     help="list reference true pairs missing from the new file (uses --strand/--a-def/--agg)")
     ap.add_argument("--out", help="write the ground-truth file here")
