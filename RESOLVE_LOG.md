@@ -319,3 +319,16 @@ the original prefix-tree step behaves only on average. The best-of-grid style ch
 (no `--mask_strategy` option yet); both are decisions for item 11 (what the paper claims).
 
 <!-- Add each new batch below this line using the same layout. -->
+
+---
+
+## Batch 5 - branch `daligner-ground-truth` (resolve item 2, first part: ground truth)
+The E. coli runtime benchmark needs a DALIGNER ground truth. The paper gives only the tool (DALIGNER for the NCTC data sets,
+minimap2 for P. falciparum) and the threshold (alignment fraction >= 0.2), not the DALIGNER parameters or how the alignment length
+`a` is measured.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `evaluation/daligner_ground_truth.py` | L1-L180 | NEW FILE | Converts `LAshow` output to the tab-separated `i j a strand` file LexicHash reads (0-based read numbers, `a` in bases). `--calibrate` tries 16 definitions (same-strand only or both; length of the A interval, the B interval, their mean or maximum; longest alignment or sum of the pieces per pair) against the shipped `NCTC1080_daligner_ground_truth.txt` and prints, for each, the number of true pairs (theta >= 0.2), the overlap with the shipped set (Jaccard) and the share of pairs with an identical length. This shows whether the DALIGNER settings reproduce the paper's ground truth before the same recipe is used on E. coli. Tested on 6 pasted `LAshow` lines only (parsing; the first line reproduces `0 22 3395.0 +`). |
+
+Finding while testing: with default DALIGNER settings the pair (reads 1, 307) has a single alignment of 2,402 bases, whereas the shipped file has 3,969.0, so the shipped file was probably made with other settings or another length definition; the calibration run on the full NCTC1080 output decides this.
