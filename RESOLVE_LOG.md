@@ -346,3 +346,18 @@ default 0.966 (3,738 true pairs against 3,857 in the shipped file); `-l500` 0.97
 No setting reproduces the shipped lengths exactly (about 50 % of common pairs have an identical length), so tuning was stopped: the remaining difference is small.
 
 What the supplement says (Supplementary Section B, "Experiment Details"): NCTC data sets use about 1,000 reads picked so that each read has at least 5 significant DALIGNER overlaps, ground truth by DALIGNER at theta = 0.2 (no DALIGNER parameters given); P. falciparum ground truth by minimap2 2.17 (mapping quality 60; 2,000 reads with degree >= 40); the E. coli data set (SRR11434956, PacBio RS II, 144,238 reads; 113,378 after removing reads with more than 30 % error with fastq-filter) is used only for the runtime and memory comparison, so the runtime benchmark (resolve item 2) needs no ground truth. Paper section 3.2: 100 hash functions, k = 12 for MinHash, kmax = 32 for LexicHash, top T = 5n, 80 CPUs, data sets of 10, 30, 50, 70 and 90 thousand reads (down-sampled) plus the full set; reported full-set cost: LexicHash 100.1 CPU-min and 515.7 MB, MinHash 339.3 CPU-min and 1.95 GB (one CPU).
+
+---
+
+## Batch 6 - branch `fastq-support` (starts from `daligner-ground-truth`; resolve item 2, second part: input needed for the E. coli runtime benchmark)
+The E. coli data set of the paper (SRR11434956) is distributed as FASTQ and the C++ program read only FASTA.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `mycode/lexic_hash.cpp` | L3 | EDIT | Comment on the zlib include: FASTA or FASTQ. |
+| `mycode/lexic_hash.cpp` | L33-L105 (`read_fasta`) | EDIT | The reader detects the format from the first non-empty line ('>' = FASTA, '@' = FASTQ). FASTQ records are `@header`, one or more sequence lines, a `+` line, then quality lines; the quality lines are skipped by length (as many characters as the sequence had) because a quality string may start with `@` or `+`. Sequences are cleaned exactly as before (upper case, only A, C, G, T kept), every record keeps its index (an empty read stays in the numbering), the function name and the FASTA path are unchanged. CRLF line endings of the file are kept. |
+| `tests/test_fastq_input.py` | L1-L134 | NEW FILE | 8 checks (plain, gzip, CRLF without final newline, quality lines starting with `@` or `+`, N/IUPAC/lower case, wrapped sequence, empty read, `+name` line); every FASTQ run is compared with the FASTA run on the same mask file. All pass; the same test fails on the binary of batch 5. |
+| `tests/README.md` | end of file | ADD | Section "FASTQ input (batch 6)". |
+
+Regression checks with the new binary: `tests/test_input_handling.py` (all pass) and `tests/equivalence_py_vs_cpp.py` on NCTC1080 with 100 masks (0 of 200,600 sketch cells differ, 1,003 pairs identical).
+Not changed: `--method` is still ignored, reads shorter than max_k are still skipped by the C++ code, there is still no option for mask strategies.
