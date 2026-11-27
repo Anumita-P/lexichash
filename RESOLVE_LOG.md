@@ -357,3 +357,13 @@ The Spectral Jaccard Similarity repository (github.com/TavorB/spectral_jaccard_s
 | File | Lines | Type | What / why |
 |---|---|---|---|
 | `evaluation/multi_dataset_eval.py` | L1-L222 | NEW FILE | Converts each ground truth (1-based, 5 columns -> 0-based `i j a +`), runs `evaluation/scorer_ablation.py` on every data set (resumable), and writes `multi_dataset_summary.md`, `multi_dataset_long.csv` and `multi_dataset_auprc.png`: per pool (all pairs, alpha x n pairs) the mean AUROC / AUPRC of max-y, exp-decay (0.1, top 100) and the mean of the top 100, the paired difference to max-y with a bootstrap interval over data sets, the number of data sets that improve, and a per-data-set table with reads, mean read length, GC and number of true pairs. Tested on NCTC1080 and NCTC129 (100 masks, 1 seed). |
+
+
+---
+
+## Batch 8 - branch `ecoli-benchmark` (starts from `multi-nctc`; resolve item 2: E. coli runtime benchmark)
+Supplement, "Escherichia coli Dataset": SRR11434956, 144,238 reads, reads with more than 30 % error removed with fastq-filter -> 113,378 reads; used only for runtime and memory (no ground truth). Main text Section 3.2: 10/30/50/70/90 thousand-read downsamples and the full set, 100 hash functions, T = 5n, MinHash k = 12, k_max = 32; full set on one CPU: LexicHash 100.1 CPU-min / 515.7 MB, MinHash 339.3 CPU-min / 1.95 GB. Figure S7 uses k_min = 16.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `evaluation/ecoli_runtime_benchmark.py` | L1-L259 | NEW FILE | `prepare`: streams the .fastq.gz once, removes reads whose average error rate (mean of 10^(-Q/10), Phred+33) is >= 0.3, writes `filtered.fasta`, prints the kept count next to the paper's 113,378 and the counts for other thresholds (fastq-filter may define the average differently; a different count is reported, not hidden). `run`: seeded nested random subsets (10k...90k, 0 = all), runs the C++ program (`cpp`), the original Python LexicHash (`py_lexichash`) and Python MinHash (`py_minhash`, k = 12) each on ONE CPU with 100 hashes and alpha 5; CPU time (user + system) and peak memory from the kernel accounting of the child (`os.wait4`), plus wall time; results appended to `runtime_results.csv`, finished (method, size) pairs are skipped on re-run, failed runs are not recorded. `summary`: Markdown table and `runtime_scaling.png`. Tested on 3,000 synthetic reads (the three methods run end to end). Note: the C++ program also writes `sketches.txt` and `pairwise_results.txt`; that I/O is inside the measured time. |
