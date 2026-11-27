@@ -97,22 +97,28 @@ def prepare(a):
 
 # ---------------------------------------------------------------- run
 def fasta_records(path):
-    """Yield the byte offsets of the records of a FASTA file written by prepare (one line per sequence)."""
-    offs = []
+    """Byte offsets and sequence lengths of the records of a FASTA file written by prepare (one line per sequence)."""
+    offs, lens = [], []
     with open(path, "rb") as fh:
         pos = 0
         for line in fh:
             if line.startswith(b">"):
                 offs.append(pos)
+            else:
+                lens.append(len(line.rstrip(b"\r\n")))
             pos += len(line)
-    return offs
+    return offs, lens
 
 
-def make_subset(src, offs, size, seed, dst):
-    n = len(offs)
-    idx = list(range(n))
+def make_subset(src, offs, lens, size, seed, min_length, dst):
+    """Seeded nested random subset (size 0 = all) of the reads that are at least min_length long.
+
+    The length cut is needed because the original Python code crashes on reads shorter than min_k
+    (IndexError, reproduced with a 10-base read) and the C++ program skips reads shorter than max_k, so both
+    would otherwise see different read sets."""
+    idx = [k for k in range(len(offs)) if lens[k] >= min_length]
     random.Random(seed).shuffle(idx)            # nested subsets: prefixes of one shuffled order
-    chosen = sorted(idx[:size]) if size else idx
+    chosen = sorted(idx[:size]) if size else sorted(idx)
     with open(src, "rb") as fi, open(dst, "wb") as fo:
         for k in chosen:
             fi.seek(offs[k])
@@ -153,8 +159,10 @@ def run(a):
     if os.path.exists(res_path):
         with open(res_path) as fh:
             done = {(r["method"], int(r["requested_size"])) for r in csv.DictReader(fh) if r["status"] == "ok"}
-    offs = fasta_records(src)
-    print("filtered.fasta: %d reads" % len(offs))
+    offs, lens = fasta_records(src)
+    n_ok = sum(1 for x in lens if x >= a.min_length)
+    print("filtered.fasta: %d reads, %d of them at least %d bases long (the others are not used)"
+          % (len(offs), n_ok, a.min_length))
     new_file = not os.path.exists(res_path)
     with open(res_path, "a", newline="") as fh:
         w = csv.writer(fh)
@@ -169,7 +177,7 @@ def run(a):
                     print("%s size %d: done before, skipped" % (method, size))
                     continue
                 if n is None:
-                    n = make_subset(src, offs, size, a.seed, sub)
+                    n = make_subset(src, offs, lens, size, a.seed, a.min_length, sub)
                 out_dir = os.path.join(a.work_dir, "out_%s_%d" % (method, size))
                 os.makedirs(os.path.join(out_dir, "tmp"), exist_ok=True)
                 cmd, cwd = command(method, a, sub, out_dir)
@@ -245,6 +253,8 @@ def main():
     r.add_argument("--n-hash", type=int, default=100)
     r.add_argument("--alpha", type=float, default=5)
     r.add_argument("--seed", type=int, default=1)
+    r.add_argument("--min-length", type=int, default=32,
+                   help="ignore reads shorter than this (default 32 = max_k; see make_subset)")
     r.add_argument("--keep-subsets", action="store_true")
     r.add_argument("--keep-outputs", action="store_true")
     r.set_defaults(f=run)
