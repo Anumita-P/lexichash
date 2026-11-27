@@ -48,6 +48,9 @@ def _num(s):
     return int(s.replace(",", ""))
 
 
+UNPARSED = []   # alignment-looking lines that the pattern did not recognise (first few kept)
+
+
 def parse_lashow(path):
     """List of (a_read0, b_read0, strand, a_len, b_len); read numbers 0-based.
 
@@ -58,6 +61,8 @@ def parse_lashow(path):
         for line in fh:
             m = LINE.match(line)
             if not m:
+                if line.strip() and ".." in line:
+                    UNPARSED.append(line.rstrip())
                 continue
             a, b, st = int(m.group(1)) - 1, int(m.group(2)) - 1, m.group(3)
             alen = abs(_num(m.group(5)) - _num(m.group(4)))
@@ -153,6 +158,34 @@ def calibrate(recs, fasta, reference, workdir):
           "shipped file was made with other DALIGNER parameters (try -e, -l, -k, -h, -s).")
 
 
+def diagnose(recs, fasta, reference, strand, a_def, agg, n_show=12):
+    """Why are some true pairs of the reference missing from the new ground truth?"""
+    lens = read_lengths(fasta)
+    ref_true = load_true_pairs(reference, lens)
+    pairs = build(recs, strand, a_def, agg)
+    new_best = {}
+    for (i, j), (a, _) in pairs.items():
+        k = (min(i, j), max(i, j))
+        new_best[k] = max(new_best.get(k, 0.0), a)
+    ref_a = {}
+    for (i, j), a in read_reference(reference).items():
+        k = (min(i, j), max(i, j))
+        ref_a[k] = max(ref_a.get(k, 0.0), a)
+    missing = sorted(ref_true - {k for k in new_best if k in ref_true and
+                                 new_best[k] / (lens[k[0]] + lens[k[1]] - new_best[k]) >= THETA})
+    no_aln = [k for k in missing if k not in new_best]
+    print("\nTrue pairs of the reference that are not true in the new file: %d" % len(missing))
+    print("  of these, no alignment at all in the DALIGNER output: %d; alignment found but shorter: %d"
+          % (len(no_aln), len(missing) - len(no_aln)))
+    print("  pair (0-based)   len1   len2   ref a   new a   ref theta  new theta")
+    for k in missing[:n_show]:
+        l1, l2 = lens[k[0]], lens[k[1]]
+        r = ref_a[k]
+        n = new_best.get(k, 0.0)
+        print("  %5d %5d   %6d %6d %7.0f %7.0f   %7.3f   %7.3f"
+              % (k[0], k[1], l1, l2, r, n, r / (l1 + l2 - r), n / (l1 + l2 - n)))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("lashow", help="output of LAshow")
@@ -162,11 +195,21 @@ def main():
     ap.add_argument("--strand", choices=("n", "both"), default="n")
     ap.add_argument("--a-def", choices=("A", "B", "mean", "max"), default="A")
     ap.add_argument("--agg", choices=("max", "sum"), default="max")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="list reference true pairs missing from the new file (uses --strand/--a-def/--agg)")
     ap.add_argument("--out", help="write the ground-truth file here")
     a = ap.parse_args()
     recs = parse_lashow(a.lashow)
     if not recs:
         sys.exit("no alignment lines recognised in %s" % a.lashow)
+    if UNPARSED:
+        print("WARNING: %d lines contain '..' but were not recognised as alignments; first ones:" % len(UNPARSED))
+        for u in UNPARSED[:5]:
+            print("   " + u)
+    if a.diagnose:
+        if not (a.fasta and a.reference):
+            sys.exit("--diagnose needs --fasta and --reference")
+        diagnose(recs, a.fasta, a.reference, a.strand, a.a_def, a.agg)
     if a.calibrate:
         if not (a.fasta and a.reference):
             sys.exit("--calibrate needs --fasta and --reference")
