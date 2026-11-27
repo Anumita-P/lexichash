@@ -319,3 +319,45 @@ the original prefix-tree step behaves only on average. The best-of-grid style ch
 (no `--mask_strategy` option yet); both are decisions for item 11 (what the paper claims).
 
 <!-- Add each new batch below this line using the same layout. -->
+
+---
+
+## Batch 5 - branch `daligner-ground-truth` (resolve item 2, first part: ground truth)
+The E. coli runtime benchmark needs a DALIGNER ground truth. The paper gives only the tool (DALIGNER for the NCTC data sets,
+minimap2 for P. falciparum) and the threshold (alignment fraction >= 0.2), not the DALIGNER parameters or how the alignment length
+`a` is measured.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `evaluation/daligner_ground_truth.py` | L1-L180 | NEW FILE | Converts `LAshow` output to the tab-separated `i j a strand` file LexicHash reads (0-based read numbers, `a` in bases). `--calibrate` tries 16 definitions (same-strand only or both; length of the A interval, the B interval, their mean or maximum; longest alignment or sum of the pieces per pair) against the shipped `NCTC1080_daligner_ground_truth.txt` and prints, for each, the number of true pairs (theta >= 0.2), the overlap with the shipped set (Jaccard) and the share of pairs with an identical length. This shows whether the DALIGNER settings reproduce the paper's ground truth before the same recipe is used on E. coli. Tested on 6 pasted `LAshow` lines only (parsing; the first line reproduces `0 22 3395.0 +`). |
+
+Finding while testing: with default DALIGNER settings the pair (reads 1, 307) has a single alignment of 2,402 bases, whereas the shipped file has 3,969.0, so the shipped file was probably made with other settings or another length definition; the calibration run on the full NCTC1080 output decides this.
+
+Result of the first calibration run on the full NCTC1080 DALIGNER output (default `daligner -T4`; 19,032 alignment lines parsed, 7,424 of them reverse-complement):
+best definition = same-strand alignments only, `a` = length of the interval on read A, sum over the pieces of a pair: 3,694 of the shipped file's 3,857 true pairs are reproduced
+(Jaccard 0.956; 163 missing, 6 extra), median length ratio 1.000, identical length for 52.8 % of the common pairs.
+Added in the same branch: `--diagnose` (lists true pairs of the reference that are missing from the new file and says whether DALIGNER found no alignment or a shorter one)
+and a warning that lists lines of the `LAshow` output the pattern did not recognise (the first run parsed 19,032 of 19,250 records).
+Second calibration step (same branch): `--diagnose` showed that the 218 unparsed lines are those with a read number >= 1,000, which LAshow prints with a thousands separator (`1,002.1`); the pattern now accepts `[\d,]+` for both read numbers (about 1 % of the records, all involving the last 3 reads, so it explains some of the 58 pairs "with no alignment at all"). It also showed that for 105 true pairs the shipped length is clearly longer than the sum of the DALIGNER pieces (for example reads 30 and 459: 9,516 against 2,388), so a third way of combining the pieces was added: `--agg span` (from the start of the first piece to the end of the last piece on each read). The calibration table now has 24 rows.
+
+Calibration result after the parameter sweep (NCTC1080, `daligner -T4`, strand n, a = A interval, best of sum/span):
+default 0.966 (3,738 true pairs against 3,857 in the shipped file); `-l500` 0.972 (3,871 true pairs, 53 missing, 67 extra); `-h25` 0.967.
+`-e` below 0.70 is rejected by DALIGNER ("Average correlation must be in [.7,1.)"), so those sweep runs were invalid.
+No setting reproduces the shipped lengths exactly (about 50 % of common pairs have an identical length), so tuning was stopped: the remaining difference is small.
+
+What the supplement says (Supplementary Section B, "Experiment Details"): NCTC data sets use about 1,000 reads picked so that each read has at least 5 significant DALIGNER overlaps, ground truth by DALIGNER at theta = 0.2 (no DALIGNER parameters given); P. falciparum ground truth by minimap2 2.17 (mapping quality 60; 2,000 reads with degree >= 40); the E. coli data set (SRR11434956, PacBio RS II, 144,238 reads; 113,378 after removing reads with more than 30 % error with fastq-filter) is used only for the runtime and memory comparison, so the runtime benchmark (resolve item 2) needs no ground truth. Paper section 3.2: 100 hash functions, k = 12 for MinHash, kmax = 32 for LexicHash, top T = 5n, 80 CPUs, data sets of 10, 30, 50, 70 and 90 thousand reads (down-sampled) plus the full set; reported full-set cost: LexicHash 100.1 CPU-min and 515.7 MB, MinHash 339.3 CPU-min and 1.95 GB (one CPU).
+
+---
+
+## Batch 6 - branch `fastq-support` (starts from `daligner-ground-truth`; resolve item 2, second part: input needed for the E. coli runtime benchmark)
+The E. coli data set of the paper (SRR11434956) is distributed as FASTQ and the C++ program read only FASTA.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `mycode/lexic_hash.cpp` | L3 | EDIT | Comment on the zlib include: FASTA or FASTQ. |
+| `mycode/lexic_hash.cpp` | L33-L126 (`read_fasta`, comment L33-L42) | EDIT | The reader detects the format from the first non-empty line ('>' = FASTA, '@' = FASTQ). FASTQ records are `@header`, one or more sequence lines, a `+` line, then quality lines; the quality lines are skipped by length (as many characters as the sequence had) because a quality string may start with `@` or `+`. Sequences are cleaned exactly as before (upper case, only A, C, G, T kept), every record keeps its index (an empty read stays in the numbering), the function name and the FASTA path are unchanged. CRLF line endings of the file are kept. |
+| `tests/test_fastq_input.py` | L1-L140 | NEW FILE | 8 checks (plain, gzip, CRLF without final newline, quality lines starting with `@` or `+`, N/IUPAC/lower case, wrapped sequence, empty read, `+name` line); every FASTQ run is compared with the FASTA run on the same mask file. All pass; the same test fails on the binary of batch 5. |
+| `tests/README.md` | end of file | ADD | Section "FASTQ input (batch 6)". |
+
+Regression checks with the new binary: `tests/test_input_handling.py` (all pass) and `tests/equivalence_py_vs_cpp.py` on NCTC1080 with 100 masks (0 of 200,600 sketch cells differ, 1,003 pairs identical).
+Not changed: `--method` is still ignored, reads shorter than max_k are still skipped by the C++ code, there is still no option for mask strategies.
