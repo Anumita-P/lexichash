@@ -347,6 +347,28 @@ No setting reproduces the shipped lengths exactly (about 50 % of common pairs ha
 
 What the supplement says (Supplementary Section B, "Experiment Details"): NCTC data sets use about 1,000 reads picked so that each read has at least 5 significant DALIGNER overlaps, ground truth by DALIGNER at theta = 0.2 (no DALIGNER parameters given); P. falciparum ground truth by minimap2 2.17 (mapping quality 60; 2,000 reads with degree >= 40); the E. coli data set (SRR11434956, PacBio RS II, 144,238 reads; 113,378 after removing reads with more than 30 % error with fastq-filter) is used only for the runtime and memory comparison, so the runtime benchmark (resolve item 2) needs no ground truth. Paper section 3.2: 100 hash functions, k = 12 for MinHash, kmax = 32 for LexicHash, top T = 5n, 80 CPUs, data sets of 10, 30, 50, 70 and 90 thousand reads (down-sampled) plus the full set; reported full-set cost: LexicHash 100.1 CPU-min and 515.7 MB, MinHash 339.3 CPU-min and 1.95 GB (one CPU).
 
+
+---
+
+## Batch 7 - branch `multi-nctc` (starts from `daligner-ground-truth`; resolve items 11 and 2 scope: more than one NCTC data set)
+Mail thread (11 Nov and 2 Dec 2025): the paper evaluates 40 NCTC data sets; we had only NCTC1080 and P. falciparum, and Grant Greenberg advised more data for a full paper.
+The Spectral Jaccard Similarity repository (github.com/TavorB/spectral_jaccard_similarity) holds, for 41 NCTC data sets, the filtered reads (`filtered_fasta/`, about 1,000 reads each, 512 MB in all) and the DALIGNER ground truth (`groundTruths/`, 9.6 MB), so no DALIGNER run is needed for them. Checked on NCTC1080: its reads are identical to `LexicHash-main/data/NCTC1080/NCTC1080_reads.fasta.gz`, and its ground truth is the file in this repository with 1-based read numbers and two extra columns (the read lengths): all 10,514 lines identical after subtracting 1.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `evaluation/multi_dataset_eval.py` | L1-L222 | NEW FILE | Converts each ground truth (1-based, 5 columns -> 0-based `i j a +`), runs `evaluation/scorer_ablation.py` on every data set (resumable), and writes `multi_dataset_summary.md`, `multi_dataset_long.csv` and `multi_dataset_auprc.png`: per pool (all pairs, alpha x n pairs) the mean AUROC / AUPRC of max-y, exp-decay (0.1, top 100) and the mean of the top 100, the paired difference to max-y with a bootstrap interval over data sets, the number of data sets that improve, and a per-data-set table with reads, mean read length, GC and number of true pairs. Tested on NCTC1080 and NCTC129 (100 masks, 1 seed). |
+
+
+---
+
+## Batch 8 - branch `ecoli-benchmark` (starts from `multi-nctc`; resolve item 2: E. coli runtime benchmark)
+Supplement, "Escherichia coli Dataset": SRR11434956, 144,238 reads, reads with more than 30 % error removed with fastq-filter -> 113,378 reads; used only for runtime and memory (no ground truth). Main text Section 3.2: 10/30/50/70/90 thousand-read downsamples and the full set, 100 hash functions, T = 5n, MinHash k = 12, k_max = 32; full set on one CPU: LexicHash 100.1 CPU-min / 515.7 MB, MinHash 339.3 CPU-min / 1.95 GB. Figure S7 uses k_min = 16.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `evaluation/ecoli_runtime_benchmark.py` | L1-L269 | NEW FILE | `prepare`: streams the .fastq.gz once, removes reads whose average error rate (mean of 10^(-Q/10), Phred+33) is >= 0.3, writes `filtered.fasta`, prints the kept count next to the paper's 113,378 and the counts for other thresholds (fastq-filter may define the average differently; a different count is reported, not hidden). `run`: seeded nested random subsets (10k...90k, 0 = all), runs the C++ program (`cpp`), the original Python LexicHash (`py_lexichash`) and Python MinHash (`py_minhash`, k = 12) each on ONE CPU with 100 hashes and alpha 5; CPU time (user + system) and peak memory from the kernel accounting of the child (`os.wait4`), plus wall time; results appended to `runtime_results.csv`, finished (method, size) pairs are skipped on re-run, failed runs are not recorded. `summary`: Markdown table and `runtime_scaling.png`. Tested on 3,000 synthetic reads (the three methods run end to end). Note: the C++ program also writes `sketches.txt` and `pairwise_results.txt`; that I/O is inside the measured time. |
+
+Fix found on the real data (same batch): the original Python LexicHash crashes with `IndexError: index 0 is out of bounds for axis 0 with size 0` on any read shorter than k_min (16); reproduced with a 10-base read (reads of 20, 31 and 32 bases run). The ENA E. coli file contains such reads (the error-rate filter does not remove them). `run` now takes `--min-length` (default 32 = k_max, the length below which the C++ program skips a read anyway), so both programs see the same reads; `fasta_records` returns the lengths (about L100-L112) and `make_subset` draws only from reads of at least that length (about L115-L130). On the real data the file has 196,049 reads (paper: 144,238) and 126,923 remain after the 30 % error filter (paper: 113,378); fastq-filter's definition of the average error rate (mean of the per-base error probabilities) was checked in its source and equals ours, so the difference is in the data file, not the filter.
 ---
 
 ## Batch 6 - branch `fastq-support` (starts from `daligner-ground-truth`; resolve item 2, second part: input needed for the E. coli runtime benchmark)
