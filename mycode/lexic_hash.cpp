@@ -1,6 +1,6 @@
 #include <bits/stdc++.h>
 #include <omp.h> // OpenMP
-#include <zlib.h> // reads plain and gzip-compressed FASTA (link with -lz)
+#include <zlib.h> // reads plain and gzip-compressed FASTA or FASTQ (link with -lz)
 // #include <seqan3/io/sequence_file/input.hpp>
 
 using namespace std;
@@ -30,12 +30,16 @@ static const array<int8_t, 256> BASE_CODE = []()
     return t;
 }();
 
-// Reads a FASTA file, plain or gzip-compressed (gzopen reads both).
+// Reads a FASTA or FASTQ file, plain or gzip-compressed (gzopen reads both). The format is
+// detected from the first non-empty line: '>' = FASTA, '@' = FASTQ.
 // * Every record is kept, in file order, so sequence i in the output is record i of the
 //   file. Reads shorter than max_k are NOT removed (that used to shift all later
 //   indices); they stay in the numbering but are not sketched, see sketching().
 // * Lower case is converted to upper case and every character other than A, C, G, T
 //   (N, IUPAC codes, ...) is deleted, the same as clean_seqs() in the Python code.
+// * FASTQ: a record is  @header / sequence (one or more lines) / + line / quality. The quality
+//   lines are skipped by length (they are read until as many quality characters as sequence
+//   characters have been seen), because a quality line may itself start with '@' or '+'.
 vector<string> read_fasta(const string &fasta_path, size_t max_k) {
     vector<string> seqs;
     gzFile fp = gzopen(fasta_path.c_str(), "rb");
@@ -46,11 +50,45 @@ vector<string> read_fasta(const string &fasta_path, size_t max_k) {
     gzbuffer(fp, 1 << 20);
 
     bool in_record = false;
+    // FASTQ state: 0 = expecting a header, 1 = reading sequence lines, 2 = skipping quality lines
+    enum Format { UNKNOWN, FASTA, FASTQ } format = UNKNOWN;
+    int fq_state = 0;
+    size_t fq_seq_chars = 0, fq_qual_chars = 0; // raw characters before cleaning
+
+    auto add_bases = [&](const string &l) {
+        string &cur = seqs.back();
+        for (char c : l) {
+            int code = BASE_CODE[(unsigned char)c];
+            if (code >= 0)
+                cur += "ATGC"[code];
+        }
+    };
     auto handle_line = [&](string &l) {
         while (!l.empty() && (l.back() == '\n' || l.back() == '\r'))
             l.pop_back();
+        if (format == FASTQ && fq_state == 2) { // quality line (may be empty only for an empty read)
+            fq_qual_chars += l.size();
+            if (fq_qual_chars >= fq_seq_chars)
+                fq_state = 0;
+            return;
+        }
         if (l.empty())
             return;
+        if (format == UNKNOWN && (l[0] == '>' || l[0] == '@'))
+            format = (l[0] == '@') ? FASTQ : FASTA;
+        if (format == FASTQ) {
+            if (fq_state == 0) { // header line
+                seqs.emplace_back();
+                fq_seq_chars = fq_qual_chars = 0;
+                fq_state = 1;
+            } else if (l[0] == '+') { // separator line
+                fq_state = (fq_seq_chars == 0) ? 0 : 2;
+            } else { // sequence line
+                fq_seq_chars += l.size();
+                add_bases(l);
+            }
+            return;
+        }
         if (l[0] == '>') {
             seqs.emplace_back();
             in_record = true;
@@ -60,12 +98,7 @@ vector<string> read_fasta(const string &fasta_path, size_t max_k) {
             seqs.emplace_back();
             in_record = true;
         }
-        string &cur = seqs.back();
-        for (char c : l) {
-            int code = BASE_CODE[(unsigned char)c];
-            if (code >= 0)
-                cur += "ATGC"[code];
-        }
+        add_bases(l);
     };
 
     const int BUF = 1 << 16;

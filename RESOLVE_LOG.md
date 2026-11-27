@@ -367,3 +367,17 @@ Supplement, "Escherichia coli Dataset": SRR11434956, 144,238 reads, reads with m
 | File | Lines | Type | What / why |
 |---|---|---|---|
 | `evaluation/ecoli_runtime_benchmark.py` | L1-L259 | NEW FILE | `prepare`: streams the .fastq.gz once, removes reads whose average error rate (mean of 10^(-Q/10), Phred+33) is >= 0.3, writes `filtered.fasta`, prints the kept count next to the paper's 113,378 and the counts for other thresholds (fastq-filter may define the average differently; a different count is reported, not hidden). `run`: seeded nested random subsets (10k...90k, 0 = all), runs the C++ program (`cpp`), the original Python LexicHash (`py_lexichash`) and Python MinHash (`py_minhash`, k = 12) each on ONE CPU with 100 hashes and alpha 5; CPU time (user + system) and peak memory from the kernel accounting of the child (`os.wait4`), plus wall time; results appended to `runtime_results.csv`, finished (method, size) pairs are skipped on re-run, failed runs are not recorded. `summary`: Markdown table and `runtime_scaling.png`. Tested on 3,000 synthetic reads (the three methods run end to end). Note: the C++ program also writes `sketches.txt` and `pairwise_results.txt`; that I/O is inside the measured time. |
+---
+
+## Batch 6 - branch `fastq-support` (starts from `daligner-ground-truth`; resolve item 2, second part: input needed for the E. coli runtime benchmark)
+The E. coli data set of the paper (SRR11434956) is distributed as FASTQ and the C++ program read only FASTA.
+
+| File | Lines | Type | What / why |
+|---|---|---|---|
+| `mycode/lexic_hash.cpp` | L3 | EDIT | Comment on the zlib include: FASTA or FASTQ. |
+| `mycode/lexic_hash.cpp` | L33-L126 (`read_fasta`, comment L33-L42) | EDIT | The reader detects the format from the first non-empty line ('>' = FASTA, '@' = FASTQ). FASTQ records are `@header`, one or more sequence lines, a `+` line, then quality lines; the quality lines are skipped by length (as many characters as the sequence had) because a quality string may start with `@` or `+`. Sequences are cleaned exactly as before (upper case, only A, C, G, T kept), every record keeps its index (an empty read stays in the numbering), the function name and the FASTA path are unchanged. CRLF line endings of the file are kept. |
+| `tests/test_fastq_input.py` | L1-L140 | NEW FILE | 8 checks (plain, gzip, CRLF without final newline, quality lines starting with `@` or `+`, N/IUPAC/lower case, wrapped sequence, empty read, `+name` line); every FASTQ run is compared with the FASTA run on the same mask file. All pass; the same test fails on the binary of batch 5. |
+| `tests/README.md` | end of file | ADD | Section "FASTQ input (batch 6)". |
+
+Regression checks with the new binary: `tests/test_input_handling.py` (all pass) and `tests/equivalence_py_vs_cpp.py` on NCTC1080 with 100 masks (0 of 200,600 sketch cells differ, 1,003 pairs identical).
+Not changed: `--method` is still ignored, reads shorter than max_k are still skipped by the C++ code, there is still no option for mask strategies.

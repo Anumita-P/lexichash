@@ -81,3 +81,14 @@ python3 tests/test_mask_strategies.py
 python3 tests/test_multiscale_sketch.py
 python3 tests/test_merge_stages.py
 ```
+
+## FASTQ input (batch 6)
+
+`test_fastq_input.py` checks that the C++ program reads FASTQ (plain or gzip; format detected from the first character, '>' or '@'): the same
+sequences as FASTQ and as FASTA give identical `sketches.txt` and `pairwise_results.txt`, also with CRLF, quality lines that start with `@` or `+`,
+N / IUPAC / lower case, a read wrapped over several lines, an empty read (keeps its index) and a `+name` separator line.
+It fails on the binary built before batch 6 (that reader understood FASTA only).
+
+```bash
+python3 tests/test_fastq_input.py --cpp-bin ./lexichash
+```
